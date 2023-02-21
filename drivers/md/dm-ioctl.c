@@ -17,6 +17,7 @@
 #include <linux/dm-ioctl.h>
 #include <linux/hdreg.h>
 #include <linux/compat.h>
+#include <linux/nospec.h>
 
 #include <linux/uaccess.h>
 
@@ -572,7 +573,7 @@ static void list_version_get_needed(struct target_type *tt, void *needed_param)
     size_t *needed = needed_param;
 
     *needed += sizeof(struct dm_target_versions);
-    *needed += strlen(tt->name);
+    *needed += strlen(tt->name) + 1;
     *needed += ALIGN_MASK;
 }
 
@@ -627,7 +628,7 @@ static int list_versions(struct file *filp, struct dm_ioctl *param, size_t param
 	iter_info.old_vers = NULL;
 	iter_info.vers = vers;
 	iter_info.flags = 0;
-	iter_info.end = (char *)vers+len;
+	iter_info.end = (char *)vers + needed;
 
 	/*
 	 * Now loop through filling out the names & versions.
@@ -1669,6 +1670,7 @@ static ioctl_fn lookup_ioctl(unsigned int cmd, int *ioctl_flags)
 	if (unlikely(cmd >= ARRAY_SIZE(_ioctls)))
 		return NULL;
 
+	cmd = array_index_nospec(cmd, ARRAY_SIZE(_ioctls));
 	*ioctl_flags = _ioctls[cmd].flags;
 	return _ioctls[cmd].fn;
 }
@@ -1987,45 +1989,6 @@ void dm_interface_exit(void)
 	dm_hash_exit();
 }
 
-
-/**
- * dm_ioctl_export - Permanently export a mapped device via the ioctl interface
- * @md: Pointer to mapped_device
- * @name: Buffer (size DM_NAME_LEN) for name
- * @uuid: Buffer (size DM_UUID_LEN) for uuid or NULL if not desired
- */
-int dm_ioctl_export(struct mapped_device *md, const char *name,
-		    const char *uuid)
-{
-	int r = 0;
-	struct hash_cell *hc;
-
-	if (!md) {
-		r = -ENXIO;
-		goto out;
-	}
-
-	/* The name and uuid can only be set once. */
-	mutex_lock(&dm_hash_cells_mutex);
-	hc = dm_get_mdptr(md);
-	mutex_unlock(&dm_hash_cells_mutex);
-	if (hc) {
-		DMERR("%s: already exported", dm_device_name(md));
-		r = -ENXIO;
-		goto out;
-	}
-
-	r = dm_hash_insert(name, uuid, md);
-	if (r) {
-		DMERR("%s: could not bind to '%s'", dm_device_name(md), name);
-		goto out;
-	}
-
-	/* Let udev know we've changed. */
-	dm_kobject_uevent(md, KOBJ_CHANGE, dm_get_event_nr(md));
-out:
-	return r;
-}
 /**
  * dm_copy_name_and_uuid - Copy mapped device name & uuid into supplied buffers
  * @md: Pointer to mapped_device
